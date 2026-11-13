@@ -1010,7 +1010,7 @@ function applyRS() {   // the main canvas is the only thing the governor rescale
   if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
 }
 function sizeCanvases() {
-  dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+  dpr = Math.min(window.devicePixelRatio || 1, PHONE ? 1 : 1.5);
   fdpr = Math.min(dpr, 1.25);   /* the floor texture covers the whole big room, so it is kept a little lighter */
   applyRS();
   floorC.width = Math.round(MAPW * fdpr); floorC.height = Math.round(MAPH * fdpr);
@@ -1165,6 +1165,10 @@ function pickWeapon() {
    60 Hz), which keeps the real frame rate above 50 fps. */
 const LOD = { q: 0, ms: 6, pc: 420, cap: 1, zf: 999, tf: 999, rs: 1, fs: 2, fc2: 9, fpx: 0, bpx: 0, fps: 0, fc: 0, ft: 0, lt: 0, wmin: 1e9, rmin: 16.7, rmT: 0, good: 0, bad: 0, skip: 0, need: 16, hold: 0, upT: -1e9, rsDirty: false };
 const LOD_MAX = 5;
+/* Phone / thermal mode: touch-first devices run cooler by default (lighter tier, lower pixel ratio, 60 fps cap) and, because a phone that
+   holds 56 fps at full quality never trips the frame-rate governor while it slowly heats up, the quality floor creeps up with play time. */
+const PHONE = (() => { try { return window.matchMedia('(pointer: coarse)').matches || (navigator.maxTouchPoints > 0 && Math.min(screen.width, screen.height) < 820); } catch (e) { return false; } })();
+LOD.floor = PHONE ? 2 : 0; LOD.heatT = 0;
 const LOD_PC = [420, 300, 200, 130, 90, 60];         // particle cap
 const LOD_CAP = [1, 0.8, 0.6, 0.45, 0.35, 0.25];     // effect-pool scale
 const LOD_ZF = [999, 999, 14, 8, 4, 0];              // how many of the nearest zombies are drawn with the full articulated model
@@ -1175,10 +1179,11 @@ const LOD_FC = [9, 12, 14, 18, 24, 32];              // ... and the largest slic
 const LOD_FP = [0, 2.4, 3.2, 4.5, 6, 8];         // target on-screen height of a floor slice in px (0 = the original rule)
 const LOD_BP = [0, 0, 0.9, 1.8, 3.5, 6];             // wall bricks shorter than this many px are not drawn one by one
 function lodSet(q) {
-  q = Math.max(0, Math.min(LOD_MAX, q));
+  q = Math.max(LOD.floor, Math.min(LOD_MAX, q));
   if (LOD_RS[q] !== LOD.rs) LOD.rsDirty = true;
   LOD.q = q; LOD.pc = LOD_PC[q]; LOD.cap = LOD_CAP[q]; LOD.zf = LOD_ZF[q]; LOD.tf = LOD_TF[q]; LOD.rs = LOD_RS[q]; LOD.fs = LOD_FS[q]; LOD.fc2 = LOD_FC[q]; LOD.fpx = LOD_FP[q]; LOD.bpx = LOD_BP[q];
 }
+if (PHONE) lodSet(LOD.floor);   // start phones on the cooler tier
 const LOD_WIN = 200;   // ms per measuring window
 function lodTick(ts, work, live) {
   LOD.ms += (work - LOD.ms) * 0.12;
@@ -1192,7 +1197,8 @@ function lodTick(ts, work, live) {
   if (LOD.wmin < LOD.rmin || ts - LOD.rmT > 10000) { LOD.rmin = LOD.wmin; LOD.rmT = ts; }   // fastest frame seen lately = the screen's refresh interval
   LOD.wmin = 1e9;
   if (!live) return;
-  const tgt = Math.min(56, 0.94 * 1000 / Math.max(LOD.rmin, 8));
+  let tgt = Math.min(56, 0.94 * 1000 / Math.max(LOD.rmin, 8)); if (PHONE) tgt = Math.min(tgt, 40);   // phones capped at 60 fps: 90 Hz screens land at 45, so do not call that a miss
+  if (PHONE) { LOD.heatT += el / 1000; const hf = LOD.heatT > 240 ? 4 : (LOD.heatT > 75 ? 3 : 2); if (hf > LOD.floor) { LOD.floor = hf; if (LOD.q < hf) lodSet(hf); } }   // sustained play: raise the minimum tier (75 s -> tier 3, 4 min -> tier 4; tuned for iPhone 15)
   if (LOD.skip > 0) { LOD.skip--; return; }   // let a change show up before judging it
   if (wf < tgt || LOD.ms > 11.5) {
     LOD.good = 0; LOD.bad++;
@@ -4739,7 +4745,7 @@ let lastTs = 0, paused = false;
 function frameLoop(ts) {
   requestAnimationFrame(frameLoop);
   const slow = state === 'menu';   // online the world keeps running while someone shops
-  if (lastTs && ts - lastTs < (slow ? 30 : 10.5)) return;
+  if (lastTs && ts - lastTs < (slow ? (PHONE ? 50 : 30) : (PHONE ? 15 : 10.5))) return;   // phones: never above 60 fps (90/120 Hz screens ran 90+); menu idles at 20 fps
   if (!lastTs) lastTs = ts;
   let dt = (ts - lastTs) / 1000;
   lastTs = ts;
